@@ -1,4 +1,4 @@
-.PHONY: all build run test migrate docker-up docker-down lint clean cli-build web-dev help
+.PHONY: all build run test migrate docker-up docker-down lint clean cli-build mcp-build web-dev help
 
 # Variables
 BINARY_NAME=agenthub-server
@@ -6,6 +6,7 @@ CLI_BINARY=agenthub-cli
 BUILD_DIR=./bin
 CMD_DIR=./cmd/server
 CLI_DIR=./cli
+MCP_DIR=./mcp-server
 WEB_DIR=./web
 MIGRATIONS_DIR=./migrations
 DATABASE_URL?=postgres://agenthub:agenthub_secret@localhost:5432/agenthub?sslmode=disable
@@ -66,6 +67,12 @@ cli-build:
 	@mkdir -p $(BUILD_DIR)
 	$(GO) build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(CLI_BINARY) $(CLI_DIR)/...
 	@echo "CLI build complete: $(BUILD_DIR)/$(CLI_BINARY)"
+
+## mcp-build: Build the MCP server
+mcp-build:
+	@echo "Building MCP server..."
+	cd $(MCP_DIR) && npm install && npm run build
+	@echo "MCP server build complete: $(MCP_DIR)/dist/"
 
 ## web-dev: Start the web development server
 web-dev:

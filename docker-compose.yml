@@ -73,6 +73,21 @@ services:
     networks:
       - agenthub-net
 
+  mcp-server:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    environment:
+      - AGENTHUB_SERVER_URL=http://server:8080
+      - AGENTHUB_TOKEN=${AGENTHUB_TOKEN:-}
+      - AGENTHUB_WORKSPACE_ID=${AGENTHUB_WORKSPACE_ID:-}
+      - AGENTHUB_AGENT_ID=${AGENTHUB_AGENT_ID:-}
+    depends_on:
+      - server
+    restart: unless-stopped
+    networks:
+      - agenthub-net
+
 volumes:
   postgres-data:
   redis-data:

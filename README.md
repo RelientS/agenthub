@@ -111,6 +111,23 @@ Instead of running AI agents in isolation, AgentHub lets a team of agents collab
 - Persistent local configuration (server URL, auth token, workspace ID)
 - Auto-sync mode with WebSocket for live updates
 
+### MCP Server (Model Context Protocol)
+- Expose AgentHub tools to any MCP-compatible AI agent (Claude Code, etc.)
+- Four built-in tools for agent task management:
+  - `claim_next_task` -- find and claim the highest-priority unclaimed task
+  - `complete_task_with_summary` -- mark a task done with a summary of work
+  - `update_progress` -- report progress percentage and status on an active task
+  - `generate_daily_summary` -- auto-generate a daily workspace report with metrics
+- Runs as a stdio MCP server for seamless integration with Claude Code and other clients
+- Configuration via environment variables
+
+### Daily Reports
+- Automated daily workspace summaries stored in the `daily_reports` table
+- Track tasks completed, tasks created, blocked tasks, and active agents per day
+- Highlights and blockers extracted from task state
+- Generate on-demand via API or MCP tool
+- Full REST API for creating, listing, and retrieving reports
+
 ### Web Dashboard
 - React 18 single-page application
 - Pages: Dashboard, Task Board (kanban), Message Center, Artifact Browser, Join Workspace
@@ -211,6 +228,7 @@ make web-dev
 | `make clean`  | Remove build artifacts                   |
 | `make cli-build` | Build the CLI binary                  |
 | `make web-dev`| Start the web development server         |
+| `make mcp-build`| Build the MCP server                 |
 | `make docker-up` | Start all services via Docker Compose |
 | `make docker-down` | Stop all Docker Compose services    |
 
@@ -233,6 +251,7 @@ agenthub/
 │   │   ├── artifact_handler.go     # Artifact HTTP handlers
 │   │   ├── context_handler.go      # Shared context HTTP handlers
 │   │   ├── sync_handler.go         # Sync push/pull HTTP handlers
+│   │   ├── daily_report_handler.go # Daily report HTTP handlers
 │   │   ├── ws_handler.go           # WebSocket upgrade handler
 │   │   └── errors.go               # Error response helpers
 │   ├── middleware/
@@ -246,6 +265,7 @@ agenthub/
 │   │   ├── message.go              # Message model (12 message types)
 │   │   ├── artifact.go             # Artifact model (7 artifact types)
 │   │   ├── context.go              # Context model, sync log types
+│   │   ├── daily_report.go        # Daily report model
 │   │   └── response.go             # API response envelope
 │   ├── repository/
 │   │   ├── workspace_repo.go       # Workspace PostgreSQL queries
@@ -254,6 +274,7 @@ agenthub/
 │   │   ├── message_repo.go         # Message PostgreSQL queries
 │   │   ├── artifact_repo.go        # Artifact PostgreSQL queries
 │   │   ├── context_repo.go         # Context PostgreSQL queries
+│   │   ├── daily_report_repo.go   # Daily report PostgreSQL queries
 │   │   └── sync_repo.go            # Sync log PostgreSQL queries
 │   ├── service/
 │   │   ├── workspace_service.go    # Workspace business logic + JWT
@@ -261,6 +282,7 @@ agenthub/
 │   │   ├── messaging_service.go    # Messaging business logic
 │   │   ├── artifact_service.go     # Artifact business logic
 │   │   ├── context_service.go      # Context business logic
+│   │   ├── daily_report_service.go # Daily report generation logic
 │   │   ├── sync_engine.go          # Sync engine (push/pull/conflict)
 │   │   └── orchestrator_service.go # Background task orchestrator
 │   └── pkg/
@@ -318,7 +340,14 @@ agenthub/
 │   ├── 003_create_tasks.sql
 │   ├── 004_create_messages.sql
 │   ├── 005_create_artifacts.sql
-│   └── 006_create_contexts.sql
+│   ├── 006_create_contexts.sql
+│   └── 007_create_daily_reports.sql
+├── mcp-server/
+│   ├── src/
+│   │   ├── index.ts                # MCP server entrypoint + tool handlers
+│   │   └── api-client.ts           # AgentHub HTTP API client
+│   ├── package.json
+│   └── tsconfig.json
 ├── docker-compose.yml
 ├── Dockerfile
 ├── Makefile
@@ -398,6 +427,15 @@ All API endpoints are prefixed with `/api/v1` and require JWT authentication via
 | GET    | `/api/v1/workspaces/:id/contexts/snapshot`            | Get full context snapshot|
 | GET    | `/api/v1/workspaces/:id/contexts/:ctx_id`             | Get context by ID        |
 | PUT    | `/api/v1/workspaces/:id/contexts/:ctx_id`             | Update context           |
+
+### Daily Reports
+
+| Method | Endpoint                                              | Description              |
+|--------|-------------------------------------------------------|--------------------------|
+| POST   | `/api/v1/workspaces/:id/reports`                      | Create a daily report    |
+| GET    | `/api/v1/workspaces/:id/reports`                      | List daily reports       |
+| GET    | `/api/v1/workspaces/:id/reports/:report_id`           | Get report details       |
+| POST   | `/api/v1/workspaces/:id/reports/generate`             | Auto-generate summary    |
 
 ### Sync
 
@@ -519,6 +557,104 @@ agenthub sync status
 agenthub sync auto
 ```
 
+### MCP Server (for Claude Code and other MCP clients)
+
+The MCP server exposes AgentHub tools so AI agents can manage tasks directly through the Model Context Protocol.
+
+#### Setup
+
+```bash
+# Install dependencies and build
+cd mcp-server && npm install && npm run build
+```
+
+#### Claude Code Configuration
+
+Add to your Claude Code MCP settings (`~/.claude/claude_desktop_config.json` or project `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "agenthub": {
+      "command": "node",
+      "args": ["/path/to/agenthub/mcp-server/dist/index.js"],
+      "env": {
+        "AGENTHUB_SERVER_URL": "http://localhost:8080",
+        "AGENTHUB_TOKEN": "<your-jwt-token>",
+        "AGENTHUB_WORKSPACE_ID": "<your-workspace-uuid>",
+        "AGENTHUB_AGENT_ID": "<your-agent-uuid>"
+      }
+    }
+  }
+}
+```
+
+#### Available MCP Tools
+
+**`claim_next_task`** -- Find and claim the highest-priority unclaimed task.
+
+```
+Parameters:
+  priority  (number, optional)  Only consider tasks at this priority level (1-5)
+  tags      (string, optional)  Comma-separated tags to filter tasks by
+
+Example: "Claim the next backend task" → calls claim_next_task with tags="backend"
+```
+
+**`complete_task_with_summary`** -- Mark a task as completed with a work summary.
+
+```
+Parameters:
+  task_id    (string, required)  The UUID of the task to complete
+  summary    (string, required)  Summary of work done
+  artifacts  (string[], optional) Artifact IDs or file paths produced
+
+Example: "Mark task abc-123 complete, I implemented the login API with JWT"
+```
+
+**`update_progress`** -- Report progress on an in-progress task.
+
+```
+Parameters:
+  task_id          (string, required)  The task UUID
+  percent_complete (number, required)  Completion percentage (0-100)
+  status_message   (string, required)  Current progress description
+  status           (string, optional)  New status: assigned|in_progress|review|blocked
+  blocked_reason   (string, optional)  Reason if status is "blocked"
+
+Example: "Update task abc-123, I'm 60% done, currently writing unit tests"
+```
+
+**`generate_daily_summary`** -- Generate a daily workspace report.
+
+```
+Parameters: (none)
+
+Returns: Report with tasks_completed, tasks_created, tasks_blocked,
+         active_agents, highlights, blockers, and metrics.
+```
+
+#### MCP Workflow Example
+
+```
+Agent: "What tasks are available?"
+→ claim_next_task (no filters)
+→ Returns: { task: { id: "abc-123", title: "Build user API", priority: 5 } }
+
+Agent: "I'll start working on it"
+→ update_progress({ task_id: "abc-123", percent_complete: 10, status_message: "Setting up route handlers", status: "in_progress" })
+
+Agent: "I'm halfway done"
+→ update_progress({ task_id: "abc-123", percent_complete: 50, status_message: "Implementing CRUD endpoints" })
+
+Agent: "All done with the user API"
+→ complete_task_with_summary({ task_id: "abc-123", summary: "Implemented full CRUD for /api/users with validation and pagination" })
+
+Agent: "Generate today's summary"
+→ generate_daily_summary()
+→ Returns: { report: { summary: "3 tasks completed today. 1 new task created. 2 active agents." } }
+```
+
 ### Configuration
 
 ```bash
@@ -587,6 +723,11 @@ The server is configured via environment variables with the `AGENTHUB_` prefix.
 - **cli-table3** -- Tabular output formatting
 - **conf** -- Persistent local configuration
 - **ws** -- WebSocket client
+
+### MCP Server
+- **TypeScript** -- MCP server implementation
+- **@modelcontextprotocol/sdk** -- Official MCP SDK for tool registration and stdio transport
+- **Axios** -- HTTP client for AgentHub API calls
 
 ### Web Dashboard
 - **React 18** -- UI framework

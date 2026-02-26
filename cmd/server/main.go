@@ -85,6 +85,7 @@ func main() {
 	artifactRepo := repository.NewArtifactRepository(pool)
 	contextRepo := repository.NewContextRepository(pool)
 	syncRepo := repository.NewSyncRepository(pool)
+	dailyReportRepo := repository.NewDailyReportRepository(pool)
 
 	// Initialize services
 	workspaceService := service.NewWorkspaceService(workspaceRepo, agentRepo, eventBus, cfg.JWT.Secret, cfg.JWT.Expire)
@@ -93,6 +94,7 @@ func main() {
 	artifactService := service.NewArtifactService(artifactRepo, syncRepo, eventBus, conflictResolver)
 	contextService := service.NewContextService(contextRepo, syncRepo, eventBus, conflictResolver)
 	syncEngine := service.NewSyncEngine(syncRepo, wsHub, eventBus, conflictResolver)
+	dailyReportService := service.NewDailyReportService(dailyReportRepo, taskRepo)
 	orchestratorService := service.NewOrchestratorService(
 		taskService, messagingService, contextService, agentRepo,
 		cfg.Orchestrator.CheckInterval, cfg.Orchestrator.StaleTaskHours,
@@ -148,6 +150,9 @@ func main() {
 
 	syncHandler := handler.NewSyncHandler(syncEngine)
 	syncHandler.RegisterRoutes(v1)
+
+	dailyReportHandler := handler.NewDailyReportHandler(dailyReportService)
+	dailyReportHandler.RegisterRoutes(v1)
 
 	// WebSocket handler (uses query param auth, not middleware)
 	wsHandler := handler.NewWSHandlerWithConfig(wsHub, cfg.JWT.Secret, cfg.WS.PingInterval, cfg.WS.PongTimeout)
