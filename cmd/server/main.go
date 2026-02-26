@@ -89,7 +89,8 @@ func main() {
 
 	// Initialize services
 	workspaceService := service.NewWorkspaceService(workspaceRepo, agentRepo, eventBus, cfg.JWT.Secret, cfg.JWT.Expire)
-	taskService := service.NewTaskService(taskRepo, syncRepo, eventBus)
+	llmService := service.NewLLMService()
+	taskService := service.NewTaskService(taskRepo, syncRepo, eventBus, llmService)
 	messagingService := service.NewMessagingService(messageRepo, syncRepo, eventBus, wsHub)
 	artifactService := service.NewArtifactService(artifactRepo, syncRepo, eventBus, conflictResolver)
 	contextService := service.NewContextService(contextRepo, syncRepo, eventBus, conflictResolver)

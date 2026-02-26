@@ -13,6 +13,7 @@ services:
       - SERVER_PORT=8080
       - LOG_LEVEL=info
       - JWT_SECRET=change-me-in-production
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy

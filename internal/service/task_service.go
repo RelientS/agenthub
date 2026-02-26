@@ -63,9 +63,10 @@ type TaskListFilter struct {
 
 // TaskService handles task business logic.
 type TaskService struct {
-	taskRepo *repository.TaskRepository
-	syncRepo *repository.SyncRepository
-	eventBus *events.Bus
+	taskRepo   *repository.TaskRepository
+	syncRepo   *repository.SyncRepository
+	eventBus   *events.Bus
+	llmService *LLMService
 }
 
 // NewTaskService creates a new TaskService.
@@ -73,11 +74,13 @@ func NewTaskService(
 	tr *repository.TaskRepository,
 	sr *repository.SyncRepository,
 	eb *events.Bus,
+	llm *LLMService,
 ) *TaskService {
 	return &TaskService{
-		taskRepo: tr,
-		syncRepo: sr,
-		eventBus: eb,
+		taskRepo:   tr,
+		syncRepo:   sr,
+		eventBus:   eb,
+		llmService: llm,
 	}
 }
 
@@ -442,6 +445,80 @@ func (s *TaskService) checkDependenciesMet(ctx context.Context, task *models.Tas
 		}
 	}
 	return true, nil
+}
+
+// DecomposeTask uses the LLM to break a task into subtasks and persists them.
+// The parent task must not itself be a subtask (depth limit = 2).
+// All subtasks are created atomically: on any failure the already-created
+// subtasks are deleted so the database is left in a consistent state.
+func (s *TaskService) DecomposeTask(ctx context.Context, workspaceID, taskID, agentID uuid.UUID) ([]*models.Task, error) {
+	if s.llmService == nil {
+		return nil, fmt.Errorf("LLM service is not configured")
+	}
+
+	parent, err := s.taskRepo.GetByID(ctx, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("getting task: %w", err)
+	}
+	if parent.WorkspaceID != workspaceID {
+		return nil, fmt.Errorf("task does not belong to this workspace")
+	}
+	if parent.ParentID != nil {
+		return nil, fmt.Errorf("cannot decompose a subtask: maximum depth is 2 levels")
+	}
+
+	suggestions, err := s.llmService.DecomposeTask(ctx, parent.Title, parent.Description)
+	if err != nil {
+		return nil, fmt.Errorf("LLM decomposition failed: %w", err)
+	}
+	if len(suggestions) == 0 {
+		return nil, fmt.Errorf("LLM returned no subtasks")
+	}
+
+	created := make([]*models.Task, 0, len(suggestions))
+	indexToID := make(map[int]uuid.UUID, len(suggestions))
+
+	for i, sug := range suggestions {
+		dependsOn := make([]uuid.UUID, 0, len(sug.DependsOnIndex))
+		for _, depIdx := range sug.DependsOnIndex {
+			if id, ok := indexToID[depIdx]; ok {
+				dependsOn = append(dependsOn, id)
+			}
+		}
+
+		priority := parent.Priority
+		if priority == 0 {
+			priority = 3
+		}
+
+		input := CreateTaskInput{
+			Title:          sug.Title,
+			Description:    sug.Description,
+			Priority:       priority,
+			ParentID:       &taskID,
+			DependsOn:      dependsOn,
+			EstimatedHours: sug.EstimatedHours,
+		}
+
+		task, createErr := s.CreateTask(ctx, workspaceID, input, agentID)
+		if createErr != nil {
+			// Best-effort rollback: delete subtasks created so far.
+			for _, c := range created {
+				_ = s.taskRepo.Delete(ctx, c.ID)
+			}
+			return nil, fmt.Errorf("creating subtask %d of %d: %w", i+1, len(suggestions), createErr)
+		}
+
+		created = append(created, task)
+		indexToID[i] = task.ID
+	}
+
+	s.eventBus.Publish(events.NewEvent(events.EventTaskCreated, workspaceID.String(), map[string]interface{}{
+		"parent_task_id": taskID,
+		"subtask_count":  len(created),
+	}))
+
+	return created, nil
 }
 
 // logChange marshals the payload and writes a sync log entry.

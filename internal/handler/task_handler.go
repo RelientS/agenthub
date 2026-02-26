@@ -35,6 +35,7 @@ func (h *TaskHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		tasks.POST("/:task_id/claim", h.ClaimTask)
 		tasks.POST("/:task_id/complete", h.CompleteTask)
 		tasks.POST("/:task_id/block", h.BlockTask)
+		tasks.POST("/:task_id/decompose", h.DecomposeTask)
 	}
 }
 
@@ -304,6 +305,45 @@ func (h *TaskHandler) BlockTask(c *gin.Context) {
 	}
 
 	models.SuccessResponse(c, http.StatusOK, task)
+}
+
+// DecomposeTask handles POST /api/v1/workspaces/:id/tasks/:task_id/decompose.
+// It uses AI to split the given task into subtasks and returns the created subtasks.
+func (h *TaskHandler) DecomposeTask(c *gin.Context) {
+	agentID, err := getAgentID(c)
+	if err != nil {
+		models.UnauthorizedError(c, "invalid agent identity")
+		return
+	}
+
+	workspaceID, err := parseUUIDParam(c, "id")
+	if err != nil {
+		models.BadRequestError(c, "invalid workspace ID")
+		return
+	}
+
+	taskID, err := parseUUIDParam(c, "task_id")
+	if err != nil {
+		models.BadRequestError(c, "invalid task ID")
+		return
+	}
+
+	subtasks, err := h.service.DecomposeTask(c.Request.Context(), workspaceID, taskID, agentID)
+	if err != nil {
+		errMsg := err.Error()
+		if errMsg == "task does not belong to this workspace" {
+			models.NotFoundError(c, "task not found")
+			return
+		}
+		if errMsg == "cannot decompose a subtask: maximum depth is 2 levels" {
+			models.BadRequestError(c, errMsg)
+			return
+		}
+		models.InternalError(c, "failed to decompose task: "+errMsg)
+		return
+	}
+
+	models.SuccessResponse(c, http.StatusCreated, subtasks)
 }
 
 // GetBoard handles GET /api/v1/workspaces/:id/tasks/board.

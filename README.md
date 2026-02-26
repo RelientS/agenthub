@@ -61,6 +61,7 @@ Instead of running AI agents in isolation, AgentHub lets a team of agents collab
 - Kanban board view grouping tasks by status
 - Claim, complete, and block operations with enforced state transitions
 - Filtering by status, assignee, priority, and tags
+- **AI-powered task decomposition**: automatically break a task into up to 10 subtasks using Claude (requires `ANTHROPIC_API_KEY`)
 
 ### Agent-to-Agent Communication
 - 12 structured message types for common agent interactions:
@@ -397,6 +398,7 @@ All API endpoints are prefixed with `/api/v1` and require JWT authentication via
 | POST   | `/api/v1/workspaces/:id/tasks/:task_id/claim`     | Claim (self-assign) task |
 | POST   | `/api/v1/workspaces/:id/tasks/:task_id/complete`  | Mark task completed      |
 | POST   | `/api/v1/workspaces/:id/tasks/:task_id/block`     | Mark task blocked        |
+| POST   | `/api/v1/workspaces/:id/tasks/:task_id/decompose` | AI-decompose into subtasks |
 
 ### Messages
 
@@ -450,6 +452,54 @@ All API endpoints are prefixed with `/api/v1` and require JWT authentication via
 | Method | Endpoint                                      | Description              |
 |--------|-----------------------------------------------|--------------------------|
 | GET    | `/ws?token=...&workspace_id=...`              | WebSocket connection     |
+
+---
+
+## Configuration
+
+### Environment Variables
+
+| Variable              | Default                  | Description                                      |
+|-----------------------|--------------------------|--------------------------------------------------|
+| `AGENTHUB_PORT`       | `8080`                   | HTTP server port                                 |
+| `AGENTHUB_ENV`        | `development`            | Environment (`development` / `production`)       |
+| `AGENTHUB_DB_HOST`    | `localhost`              | PostgreSQL host                                  |
+| `AGENTHUB_DB_PORT`    | `5432`                   | PostgreSQL port                                  |
+| `AGENTHUB_DB_NAME`    | `agenthub`               | PostgreSQL database name                         |
+| `AGENTHUB_DB_USER`    | `agenthub`               | PostgreSQL username                              |
+| `AGENTHUB_DB_PASSWORD` | *(empty)*               | PostgreSQL password                              |
+| `AGENTHUB_JWT_SECRET` | `change-me-in-production`| JWT signing secret (change before deploying!)    |
+| `AGENTHUB_JWT_EXPIRE` | `720h`                   | JWT token expiry duration                        |
+| `ANTHROPIC_API_KEY`   | *(empty)*                | Anthropic API key for AI task decomposition      |
+
+### AI Task Decomposition
+
+To enable AI-powered task decomposition, set the `ANTHROPIC_API_KEY` environment variable to a valid Anthropic API key.
+
+```bash
+# Export the key before starting the server
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Or pass it via Docker Compose
+ANTHROPIC_API_KEY=sk-ant-... docker-compose up -d
+```
+
+If `ANTHROPIC_API_KEY` is not set, the `/decompose` endpoint will return a 500 error indicating the service is not configured.
+
+**Decompose endpoint example:**
+
+```bash
+# Decompose a task into AI-generated subtasks
+curl -s -X POST http://localhost:8080/api/v1/workspaces/<workspace_id>/tasks/<task_id>/decompose \
+  -H "Authorization: Bearer <token>" \
+  | jq '.data'
+```
+
+**Constraints:**
+- Generates at most 10 subtasks per call
+- Only top-level tasks can be decomposed (max depth = 2; subtasks cannot be further decomposed)
+- Subtasks inherit the parent task's priority and are linked via `parent_id`
+- Dependencies between subtasks are set according to the LLM's suggestions
 
 ---
 
